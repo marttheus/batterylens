@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BatteryLens</string>
+    <string name="channel_monitor">Monitoramento da bateria</string>
+    <string name="channel_monitor_desc">Notificação contínua com corrente, velocidade e estimativas</string>
+    <string name="channel_alarm">Alarmes de bateria</string>
+    <string name="channel_alarm_desc">Alarme de carga, temperatura e bateria baixa</string>
+</resources>
