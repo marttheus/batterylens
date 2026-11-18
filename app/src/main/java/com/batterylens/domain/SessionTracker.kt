@@ -3,6 +3,7 @@ package com.batterylens.domain
 import com.batterylens.battery.BatterySnapshot
 import com.batterylens.data.AppUsageEntity
 import com.batterylens.data.BatteryDao
+import com.batterylens.data.ChargeEventEntity
 import com.batterylens.data.SampleEntity
 import com.batterylens.data.SessionEntity
 import com.batterylens.data.durationMs
@@ -13,9 +14,9 @@ import kotlin.math.max
 /**
  * Turns a stream of battery snapshots into charge/discharge sessions.
  *
- * Every tick attributes the interval since the previous tick to the *previous* screen state and
- * foreground app, so callers should tick immediately on screen/plug changes for clean boundaries.
- * Not thread-safe: call from a single-threaded dispatcher.
+ * Every tick attributes the interval since the previous tick to the *previous* screen state,
+ * foreground app and protection state, so callers should tick immediately on screen/plug changes
+ * for clean boundaries. Not thread-safe: call from a single-threaded dispatcher.
  */
 class SessionTracker(
     private val dao: BatteryDao,
@@ -27,15 +28,23 @@ class SessionTracker(
         val uptime: Long,
         val level: Int,
         val currentMa: Float?,
+        val voltageMv: Int,
+        val temperatureC: Float,
         val counterUah: Long?,
         val screenOn: Boolean,
         val foregroundApp: String?,
+        val protectedHold: Boolean,
     )
 
     private var session: SessionEntity? = null
     private var last: Ref? = null
     private val apps = HashMap<String, AppUsageEntity>()
     private val dirtyApps = HashSet<String>()
+    private val events = ChargeEventDetector()
+
+    /** Level held by a firmware charge limit on the latest tick, or null. */
+    var protectionLevel: Int? = null
+        private set
 
     suspend fun onTick(
         snap: BatterySnapshot,
@@ -52,16 +61,21 @@ class SessionTracker(
         }
         if (s == null) s = open(type, snap)
 
-        last?.let { prev -> s = accumulate(s!!, prev, snap, realtimeMs, uptimeMs) }
+        val protection = ChargeDiagnostics.detectProtection(snap.pluggedIn, snap.status, snap.level)
+        protectionLevel = protection
 
-        s = s!!.copy(
+        var current: SessionEntity = s
+        last?.let { prev -> current = accumulate(current, prev, snap, realtimeMs, uptimeMs) }
+
+        current = current.copy(
             endLevel = snap.level,
             updatedAt = snap.timestamp,
             plugType = if (snap.pluggedIn) snap.plugged else 0,
-            maxTempC = max(s!!.maxTempC, snap.temperatureC),
-            peakCurrentMa = max(s!!.peakCurrentMa, abs(snap.currentMa ?: 0f)),
+            maxTempC = max(current.maxTempC, snap.temperatureC),
+            peakCurrentMa = max(current.peakCurrentMa, abs(snap.currentMa ?: 0f)),
+            peakPowerW = max(current.peakPowerW, abs(snap.powerW ?: 0f)),
+            protectionLevel = protection ?: current.protectionLevel,
         )
-        val current = s!!
         dao.updateSession(current)
         if (dirtyApps.isNotEmpty()) {
             dao.upsertAppUsage(dirtyApps.mapNotNull { apps[it] })
@@ -79,10 +93,20 @@ class SessionTracker(
                 plugged = snap.plugged,
             )
         )
+        if (current.isCharge && protection == null) {
+            events.feed(snap.timestamp, snap.powerW, snap.level, snap.temperatureC, screenOn, snap.plugged)?.let { e ->
+                dao.insertChargeEvent(
+                    ChargeEventEntity(
+                        sessionId = current.id, timestamp = e.timestamp, type = e.type.name,
+                        fromW = e.fromW, toW = e.toW, level = e.level, temperatureC = e.temperatureC, cause = e.cause?.name,
+                    )
+                )
+            }
+        }
         session = current
         last = Ref(
-            snap.timestamp, realtimeMs, uptimeMs, snap.level, snap.currentMa,
-            snap.chargeCounterUah, screenOn, foregroundApp,
+            snap.timestamp, realtimeMs, uptimeMs, snap.level, snap.currentMa, snap.voltageMv, snap.temperatureC,
+            snap.chargeCounterUah, screenOn, foregroundApp, protection != null,
         )
         return current
     }
@@ -104,8 +128,9 @@ class SessionTracker(
             abs(snap.chargeCounterUah - prev.counterUah) / 1000.0
         } else null
         val mah = BatteryMath.chooseMah(integrated, counterMah, dt)
+        val wh = mah * (prev.voltageMv + snap.voltageMv) / 2.0 / 1_000_000.0
 
-        var out = s.copy(totalMah = s.totalMah + mah)
+        var out = s.copy(totalMah = s.totalMah + mah, energyWh = s.energyWh + wh)
         out = if (prev.screenOn) {
             out.copy(screenOnMs = out.screenOnMs + dt, screenOnMah = out.screenOnMah + mah)
         } else {
@@ -120,8 +145,14 @@ class SessionTracker(
         }
 
         if (s.isCharge) {
+            if (prev.level < BatteryMath.CV_PHASE_LEVEL && !prev.protectedHold) {
+                out = out.copy(energyBelow80Wh = out.energyBelow80Wh + wh, msBelow80 = out.msBelow80 + dt)
+            }
+            if (prev.level >= 100) out = out.copy(fullHoldMs = out.fullHoldMs + dt)
+            if (prev.protectedHold) out = out.copy(protectedHoldMs = out.protectedHoldMs + dt)
             if (snap.level > prev.level) {
-                out = out.copy(wearCycles = out.wearCycles + BatteryMath.wearCycles(prev.level, snap.level))
+                val thermal = BatteryMath.temperatureFactor((prev.temperatureC + snap.temperatureC) / 2f)
+                out = out.copy(wearCycles = out.wearCycles + BatteryMath.wearCycles(prev.level, snap.level) * thermal)
             }
         } else {
             val drop = prev.level - snap.level
@@ -144,6 +175,7 @@ class SessionTracker(
         if (open.type == type && now - open.updatedAt < RESUME_WINDOW_MS) {
             apps.clear()
             dao.appUsage(open.id).forEach { apps[it.packageName] = it }
+            events.reset()
             return open
         }
         finalize(open)
@@ -153,6 +185,7 @@ class SessionTracker(
     private suspend fun open(type: String, snap: BatterySnapshot): SessionEntity {
         apps.clear()
         dirtyApps.clear()
+        events.reset()
         last = null
         val fresh = SessionEntity(
             type = type,

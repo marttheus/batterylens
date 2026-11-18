@@ -13,6 +13,7 @@ import com.batterylens.LiveStatus
 import com.batterylens.R
 import com.batterylens.data.AppSettings
 import com.batterylens.data.SessionEntity
+import com.batterylens.domain.DrainWatcher
 import com.batterylens.domain.LiveMetrics
 import com.batterylens.ui.MainActivity
 import com.batterylens.ui.components.formatMa
@@ -26,6 +27,7 @@ object Notifications {
     const val ID_CHARGE_ALARM = 10
     const val ID_TEMP_ALARM = 11
     const val ID_LOW_ALARM = 12
+    const val ID_DRAIN_ALERT = 13
 
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -74,7 +76,10 @@ object Notifications {
         val l = Locale.getDefault()
         val title: String
         val text: String
-        if (snap.pluggedIn) {
+        if (snap.pluggedIn && status.protectionLevel != null) {
+            title = "${snap.level}% • Proteção de bateria ativa"
+            text = "Carga mantida em ${status.protectionLevel}% para preservar a bateria"
+        } else if (snap.pluggedIn) {
             title = "${snap.level}% • Carregando ${formatMa(snap.currentMa)}"
             text = if (snap.level < settings.chargeTarget) {
                 "Até ${settings.chargeTarget}%: ${formatMinutes(metrics.minutesToTarget)} • Até 100%: ${formatMinutes(metrics.minutesToFull)}"
@@ -132,8 +137,9 @@ class AlarmChecker(private val context: Context) {
     private var lowAlarmSession = -1L
     private var lastTempAlarm = 0L
     private var wasPlugged: Boolean? = null
+    private val drainWatcher = DrainWatcher()
 
-    fun check(status: LiveStatus, settings: AppSettings) {
+    fun check(status: LiveStatus, settings: AppSettings, capacityMah: Double) {
         val snap = status.snapshot
         val session = status.session ?: return
 
@@ -141,8 +147,10 @@ class AlarmChecker(private val context: Context) {
         if (wasPlugged == true && !snap.pluggedIn) Notifications.cancel(context, Notifications.ID_CHARGE_ALARM)
         wasPlugged = snap.pluggedIn
 
+        // A firmware charge limit already stops charging: ringing on top of it is just noise.
         if (settings.chargeAlarmEnabled && snap.pluggedIn && snap.level >= settings.chargeTarget &&
-            session.startLevel < settings.chargeTarget && chargeAlarmSession != session.id
+            session.startLevel < settings.chargeTarget && chargeAlarmSession != session.id &&
+            status.protectionLevel == null
         ) {
             chargeAlarmSession = session.id
             Notifications.alarm(
@@ -173,6 +181,25 @@ class AlarmChecker(private val context: Context) {
                 context, Notifications.ID_LOW_ALARM,
                 "Bateria baixa: ${snap.level}%",
                 "Descargas profundas desgastam a bateria. Conecte o carregador.",
+                false,
+            )
+        }
+
+        val drain = drainWatcher.update(
+            session, status.screenOn, capacityMah,
+            settings.drainAlertPctPerHour.toDouble(), settings.drainAlertMinDeepSleep.toDouble(),
+        )
+        if (drain != null && settings.drainAlertEnabled) {
+            val l = Locale.getDefault()
+            val parts = buildList {
+                drain.pctPerHour?.let { add(String.format(l, "%.1f%%/h com a tela desligada", it)) }
+                drain.deepSleepPct?.let { add(String.format(l, "sono profundo de %.0f%%", it)) }
+            }
+            Notifications.alarm(
+                context, Notifications.ID_DRAIN_ALERT,
+                "Consumo anormal em segundo plano",
+                parts.joinToString(", ").replaceFirstChar { it.uppercase() } +
+                    ". Algum app pode estar mantendo o aparelho acordado. Veja o consumo por app no BatteryLens.",
                 false,
             )
         }

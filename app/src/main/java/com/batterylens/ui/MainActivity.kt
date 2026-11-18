@@ -45,6 +45,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.batterylens.LiveRepository
 import com.batterylens.service.BatteryMonitorService
+import com.batterylens.ui.screens.ChargersScreen
 import com.batterylens.ui.screens.ChargingScreen
 import com.batterylens.ui.screens.DischargingScreen
 import com.batterylens.ui.screens.HealthScreen
@@ -98,6 +99,23 @@ private fun NotificationPermissionRequest() {
     }
 }
 
+/** After a restore the database is closed; the process must end so Room reopens the new file. */
+@Composable
+private fun RestoredDialog() {
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Backup restaurado") },
+        text = { Text("O app será fechado. Abra-o novamente para ver os dados restaurados.") },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                activity?.finishAffinity()
+                kotlin.system.exitProcess(0)
+            }) { Text("Fechar app") }
+        },
+    )
+}
+
 @Composable
 private fun AppRoot(vm: MainViewModel) {
     val nav = rememberNavController()
@@ -109,6 +127,8 @@ private fun AppRoot(vm: MainViewModel) {
     LaunchedEffect(message) {
         message?.let { snackbar.showSnackbar(it); vm.consumeMessage() }
     }
+    val restored by vm.restored.collectAsStateWithLifecycle()
+    if (restored) RestoredDialog()
     val startRoute = remember { if (LiveRepository.status.value?.snapshot?.pluggedIn == false) "discharging" else "charging" }
 
     Scaffold(
@@ -119,6 +139,7 @@ private fun AppRoot(vm: MainViewModel) {
                     Text(
                         when {
                             route == "settings" -> "Configurações"
+                            route == "chargers" -> "Carregadores"
                             route?.startsWith("session") == true -> "Detalhes da sessão"
                             else -> "BatteryLens"
                         }
@@ -154,11 +175,12 @@ private fun AppRoot(vm: MainViewModel) {
         },
     ) { padding ->
         NavHost(nav, startDestination = startRoute) {
-            composable("charging") { ChargingScreen(vm, padding) }
+            composable("charging") { ChargingScreen(vm, padding) { nav.navigate("chargers") } }
             composable("discharging") { DischargingScreen(vm, padding) }
             composable("health") { HealthScreen(vm, padding) }
             composable("history") { HistoryScreen(vm, padding) { id -> nav.navigate("session/$id") } }
             composable("settings") { SettingsScreen(vm, padding) }
+            composable("chargers") { ChargersScreen(vm, padding) }
             composable("session/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
                 SessionDetailScreen(vm, e.arguments?.getLong("id") ?: 0L, padding) { nav.popBackStack() }
             }

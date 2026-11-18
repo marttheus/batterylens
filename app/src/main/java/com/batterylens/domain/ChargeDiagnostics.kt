@@ -14,6 +14,11 @@ enum class ChargeSpeed(val label: String) {
 }
 
 enum class ChargeLimiter(val title: String, val advice: String) {
+    PROTECTION(
+        "Proteção de bateria ativa",
+        "O sistema está segurando a carga neste nível para preservar a bateria (ex.: \"Proteção da bateria\" da Samsung). " +
+            "Isso é bom: o desgaste para enquanto o limite estiver ativo.",
+    ),
     CV_PHASE(
         "Fase final (acima de 80%)",
         "Acima de ~80% a bateria carrega em tensão constante e a corrente cai naturalmente. É normal e protege a bateria.",
@@ -54,6 +59,9 @@ object ChargeDiagnostics {
     const val HOT_C = 40f
     const val WARM_C = 37f
 
+    private const val STATUS_NOT_CHARGING = 4 // BatteryManager.BATTERY_STATUS_NOT_CHARGING
+    private const val STATUS_FULL = 5 // BatteryManager.BATTERY_STATUS_FULL
+
     fun speedFor(powerW: Float?): ChargeSpeed = when {
         powerW == null || powerW <= 0f -> ChargeSpeed.UNKNOWN
         powerW < 7.5f -> ChargeSpeed.SLOW
@@ -63,9 +71,30 @@ object ChargeDiagnostics {
     }
 
     /**
-     * @param plugType BatteryManager.BATTERY_PLUGGED_* value (1 = AC, 2 = USB, 4 = wireless).
+     * Detects a firmware charge limit (Samsung "Battery protection", Pixel "Charging optimization",
+     * etc.): the phone is plugged in, below 100 %, and the system reports it is not charging or full.
+     * Returns the level being held, or null.
      */
-    fun diagnose(powerW: Float?, level: Int, temperatureC: Float, screenOn: Boolean, plugType: Int): ChargeDiagnosis {
+    fun detectProtection(pluggedIn: Boolean, status: Int, level: Int): Int? {
+        if (!pluggedIn || level >= 100 || level < 50) return null
+        return if (status == STATUS_NOT_CHARGING || status == STATUS_FULL) level else null
+    }
+
+    /**
+     * @param plugType BatteryManager.BATTERY_PLUGGED_* value (1 = AC, 2 = USB, 4 = wireless).
+     * @param protectionLevel level held by a firmware limit, from [detectProtection].
+     */
+    fun diagnose(
+        powerW: Float?,
+        level: Int,
+        temperatureC: Float,
+        screenOn: Boolean,
+        plugType: Int,
+        protectionLevel: Int? = null,
+    ): ChargeDiagnosis {
+        if (protectionLevel != null) {
+            return ChargeDiagnosis(ChargeSpeed.UNKNOWN, powerW, listOf(ChargeLimiter.PROTECTION))
+        }
         val speed = speedFor(powerW)
         val limiters = buildList {
             if (level >= BatteryMath.CV_PHASE_LEVEL) add(ChargeLimiter.CV_PHASE)

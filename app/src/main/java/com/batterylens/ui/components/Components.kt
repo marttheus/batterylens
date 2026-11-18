@@ -126,6 +126,9 @@ fun LineChart(
     format: (Float) -> String = { it.toInt().toString() },
     fixedMin: Float? = null,
     fixedMax: Float? = null,
+    /** Timestamps to highlight with vertical lines (e.g. power drops), in [markerColor]. */
+    markers: List<Long> = emptyList(),
+    markerColor: Color = Color.Unspecified,
 ) {
     val measurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -176,6 +179,11 @@ fun LineChart(
         }
         drawPath(fill, Brush.verticalGradient(listOf(color.copy(alpha = 0.30f), Color.Transparent), 0f, h))
         drawPath(line, color, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+        val mColor = if (markerColor == Color.Unspecified) labelColor else markerColor
+        markers.filter { it in minX..maxX }.forEach { t ->
+            val x = labelW + (t - minX).toFloat() / (maxX - minX) * w
+            drawLine(mColor, Offset(x, 0f), Offset(x, h), 2.dp.toPx(), pathEffect = dash)
+        }
     }
 }
 

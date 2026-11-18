@@ -59,6 +59,7 @@ import com.batterylens.ui.components.formatMah
 import com.batterylens.ui.components.formatPct
 import com.batterylens.ui.components.formatPctPerHour
 import com.batterylens.ui.components.formatTemp
+import com.batterylens.ui.components.formatWatts
 import com.batterylens.ui.components.plugLabel
 import com.batterylens.ui.theme.ChargeGreen
 import com.batterylens.ui.theme.CoolBlue
@@ -139,6 +140,7 @@ fun SessionDetailScreen(vm: MainViewModel, id: Long, padding: PaddingValues, onD
     val session by remember(id) { vm.session(id) }.collectAsState(initial = null)
     val samples by remember(id) { vm.samples(id) }.collectAsState(initial = emptyList())
     val usage by remember(id) { vm.appUsage(id) }.collectAsState(initial = emptyList())
+    val events by remember(id) { vm.chargeEvents(id) }.collectAsState(initial = emptyList())
     val cap by vm.effectiveCapacity.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     var confirmDelete by remember { mutableStateOf(false) }
@@ -161,6 +163,9 @@ fun SessionDetailScreen(vm: MainViewModel, id: Long, padding: PaddingValues, onD
                 StatRow("Velocidade média", formatMaAbs(BatteryMath.averageMa(s.totalMah, s.screenOnMs + s.screenOffMs)))
                 StatRow("Desgaste", "${formatCycles(s.wearCycles)} ciclos (${formatPct(BatteryMath.wearPercentOfLife(s.wearCycles, settings.ratedCycles), 3)})")
                 StatRow("Capacidade estimada", s.estimatedCapacityMah?.let { formatMah(it) } ?: "Carga curta demais")
+                StatRow("Pico de potência", formatWatts(s.peakPowerW))
+                if (s.fullHoldMs > 0) StatRow("Tempo em 100% conectado", formatDuration(s.fullHoldMs), DrainAmber)
+                s.protectionLevel?.let { StatRow("Proteção de bateria", "Ativa em $it% por ${formatDuration(s.protectedHoldMs)}") }
             } else {
                 StatRow("Tela ligada", "${formatDuration(s.screenOnMs)} • ${formatPctPerHour(BatteryMath.percentPerHour(BatteryMath.averageMa(s.screenOnMah, s.screenOnMs), cap))}")
                 StatRow("Tela desligada", "${formatDuration(s.screenOffMs)} • ${formatPctPerHour(BatteryMath.percentPerHour(BatteryMath.averageMa(s.screenOffMah, s.screenOffMs), cap))}")
@@ -169,6 +174,19 @@ fun SessionDetailScreen(vm: MainViewModel, id: Long, padding: PaddingValues, onD
         }
         SectionCard("Nível (%)") {
             LineChart(samples.map { ChartPoint(it.timestamp, it.level.toFloat()) }, CoolBlue, fixedMin = 0f, fixedMax = 100f)
+        }
+        if (s.isCharge) {
+            SectionCard("Carregador") { ChargerPicker(vm, s) }
+            SectionCard("Potência (W)") {
+                LineChart(
+                    samples.mapNotNull { p -> p.currentMa?.let { ChartPoint(p.timestamp, kotlin.math.abs(it) * p.voltageMv / 1_000_000f) } },
+                    ChargeGreen,
+                    format = { String.format(java.util.Locale.getDefault(), "%.1f", it) },
+                    markers = events.filter { it.type == "DROP" }.map { it.timestamp },
+                    markerColor = DrainAmber,
+                )
+                ChargeEventList(events)
+            }
         }
         SectionCard("Corrente (mA)") {
             LineChart(samples.mapNotNull { p -> p.currentMa?.let { ChartPoint(p.timestamp, it) } }, if (s.isCharge) ChargeGreen else DrainAmber)

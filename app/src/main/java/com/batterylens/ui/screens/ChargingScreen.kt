@@ -73,11 +73,12 @@ fun LoadingBox(padding: PaddingValues) {
 }
 
 @Composable
-fun ChargingScreen(vm: MainViewModel, padding: PaddingValues) {
+fun ChargingScreen(vm: MainViewModel, padding: PaddingValues, onOpenChargers: () -> Unit) {
     val live by vm.live.collectAsStateWithLifecycle()
     val metrics by vm.metrics.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val sessions by vm.sessions.collectAsStateWithLifecycle()
+    val lastProtected by vm.lastProtectedSession.collectAsStateWithLifecycle()
     val status = live ?: return LoadingBox(padding)
     val snap = status.snapshot
     val session = status.session?.takeIf { it.isCharge }
@@ -105,14 +106,20 @@ fun ChargingScreen(vm: MainViewModel, padding: PaddingValues) {
                 StatRow("Temperatura", formatTemp(snap.temperatureC), if (snap.temperatureC >= ChargeDiagnostics.HOT_C) HotRed else androidx.compose.ui.graphics.Color.Unspecified)
                 StatRow("Tensão", formatVolts(snap.voltageMv))
             }
-            ChargeDiagnosisCard(snap.powerW, snap.level, snap.temperatureC, status.screenOn, snap.plugged, session?.peakCurrentMa, snap.voltageMv)
-            SectionCard("Estimativas") {
+            ChargeDiagnosisCard(snap.powerW, snap.level, snap.temperatureC, status.screenOn, snap.plugged, session?.peakPowerW, status.protectionLevel)
+            if (session != null) {
+                SectionCard("Carregador") {
+                    ChargerPicker(vm, session)
+                    OutlinedButton(onClick = onOpenChargers) { Text("Comparar carregadores") }
+                }
+            }
+            if (status.protectionLevel == null) SectionCard("Estimativas") {
                 StatRow("Até ${settings.chargeTarget}%", formatMinutes(metrics?.minutesToTarget))
                 StatRow("Até 100%", formatMinutes(metrics?.minutesToFull))
             }
         }
 
-        ChargeAlarmCard(vm, snap.level, settings.chargeAlarmEnabled, settings.chargeTarget, settings.ratedCycles)
+        ChargeAlarmCard(vm, snap.level, settings.chargeAlarmEnabled, settings.chargeTarget, settings.ratedCycles, lastProtected?.protectionLevel)
 
         val shown = session ?: lastCharge
         if (shown != null) ChargeSessionCard(vm, shown, isCurrent = session != null, ratedCycles = settings.ratedCycles)
@@ -121,23 +128,26 @@ fun ChargingScreen(vm: MainViewModel, padding: PaddingValues) {
 
 @Composable
 private fun ChargeDiagnosisCard(
-    powerW: Float?, level: Int, tempC: Float, screenOn: Boolean, plugged: Int, peakMa: Float?, voltageMv: Int,
+    powerW: Float?, level: Int, tempC: Float, screenOn: Boolean, plugged: Int, peakW: Float?, protectionLevel: Int?,
 ) {
     val context = LocalContext.current
-    val d = ChargeDiagnostics.diagnose(powerW?.let { kotlin.math.abs(it) }, level, tempC, screenOn, plugged)
+    val d = ChargeDiagnostics.diagnose(powerW?.let { kotlin.math.abs(it) }, level, tempC, screenOn, plugged, protectionLevel)
     SectionCard("Diagnóstico de velocidade") {
         val color = when (d.speed) {
             ChargeSpeed.SUPER_FAST, ChargeSpeed.FAST -> ChargeGreen
             ChargeSpeed.NORMAL -> DrainAmber
             else -> HotRed
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        if (protectionLevel != null) {
+            Text(
+                "Carga mantida em $protectionLevel%",
+                style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = ChargeGreen,
+            )
+        } else Row(verticalAlignment = Alignment.CenterVertically) {
             Text(d.speed.label, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = color)
             Text("  ${formatWatts(powerW)}", style = MaterialTheme.typography.titleMedium)
         }
-        peakMa?.takeIf { it > 0 }?.let {
-            StatRow("Pico nesta sessão", "${formatMaAbs(it.toDouble())} (~${formatWatts(it * voltageMv / 1_000_000f)})")
-        }
+        peakW?.takeIf { it > 0 }?.let { StatRow("Pico nesta sessão", formatWatts(it)) }
         if (d.limiters.isEmpty()) {
             AssistChip(
                 onClick = {}, label = { Text("Nada limitando a carga agora") },
@@ -175,7 +185,7 @@ fun openBatterySettings(context: Context) {
 }
 
 @Composable
-private fun ChargeAlarmCard(vm: MainViewModel, level: Int, enabled: Boolean, target: Int, ratedCycles: Int) {
+private fun ChargeAlarmCard(vm: MainViewModel, level: Int, enabled: Boolean, target: Int, ratedCycles: Int, protectionSeen: Int?) {
     var slider by remember { mutableFloatStateOf(target.toFloat()) }
     LaunchedEffect(target) { slider = target.toFloat() }
     val t = slider.toInt()
@@ -188,6 +198,13 @@ private fun ChargeAlarmCard(vm: MainViewModel, level: Int, enabled: Boolean, tar
             value = slider, onValueChange = { slider = it }, valueRange = 50f..100f, steps = 49,
             onValueChangeFinished = { vm.updateSettings { it.copy(chargeTarget = slider.toInt()) } },
         )
+        protectionSeen?.let { p ->
+            Text(
+                "Seu aparelho já limitou a carga em $p% sozinho (ex.: \"Proteção da bateria\" da Samsung). Esse limite nativo " +
+                    "é melhor que o alarme, porque realmente para de carregar. Com ele ativo, o alarme não toca.",
+                style = MaterialTheme.typography.bodySmall, color = ChargeGreen,
+            )
+        }
         val wearTarget = BatteryMath.wearCycles(level, t)
         val wearFull = BatteryMath.wearCycles(level, 100)
         StatRow("Desgaste de $level% até $t%", "${formatCycles(wearTarget)} ciclos")
@@ -205,6 +222,7 @@ private fun ChargeAlarmCard(vm: MainViewModel, level: Int, enabled: Boolean, tar
 @Composable
 private fun ChargeSessionCard(vm: MainViewModel, s: SessionEntity, isCurrent: Boolean, ratedCycles: Int) {
     val samples by remember(s.id) { vm.samples(s.id) }.collectAsState(initial = emptyList())
+    val events by remember(s.id) { vm.chargeEvents(s.id) }.collectAsState(initial = emptyList())
     SectionCard(if (isCurrent) "Sessão atual" else "Última carga") {
         StatPair("Carregado", "${s.startLevel}% → ${s.endLevel}%", "Duração", formatDuration(s.durationMs))
         StatRow("Carga adicionada", formatMah(s.totalMah))
@@ -212,8 +230,18 @@ private fun ChargeSessionCard(vm: MainViewModel, s: SessionEntity, isCurrent: Bo
         StatRow("Desgaste", "${formatCycles(s.wearCycles)} ciclos (${formatPct(BatteryMath.wearPercentOfLife(s.wearCycles, ratedCycles), 3)})")
         s.estimatedCapacityMah?.let { StatRow("Capacidade estimada", formatMah(it)) }
         StatRow("Temperatura máxima", formatTemp(s.maxTempC))
-        Text("Corrente (mA)", style = MaterialTheme.typography.labelMedium)
-        LineChart(samples.mapNotNull { p -> p.currentMa?.let { ChartPoint(p.timestamp, it) } }, ChargeGreen)
+        if (s.fullHoldMs > 0) StatRow("Tempo em 100% conectado", formatDuration(s.fullHoldMs), DrainAmber)
+        if (s.protectedHoldMs > 0) StatRow("Tempo segurado pela proteção", formatDuration(s.protectedHoldMs))
+        Text("Potência (W)", style = MaterialTheme.typography.labelMedium)
+        LineChart(
+            samples.mapNotNull { p -> p.currentMa?.let { ChartPoint(p.timestamp, kotlin.math.abs(it) * p.voltageMv / 1_000_000f) } },
+            ChargeGreen,
+            format = { String.format(java.util.Locale.getDefault(), "%.1f", it) },
+            markers = events.filter { it.type == "DROP" }.map { it.timestamp },
+            markerColor = DrainAmber,
+        )
+        Text("Quedas de velocidade", style = MaterialTheme.typography.labelMedium)
+        ChargeEventList(events)
     }
 }
 

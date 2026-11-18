@@ -48,6 +48,18 @@ object BatteryMath {
         return ((from + 1)..to).sumOf { stressAt(it) } / 100.0
     }
 
+    /** Temperature at or below which charging adds no extra thermal stress in the model. */
+    const val WEAR_REFERENCE_TEMP_C = 25f
+
+    /**
+     * Thermal multiplier for wear: Li-ion ageing roughly doubles for every 10 °C above room
+     * temperature. Capped at 4× (45 °C) so a bad sensor reading cannot explode the total.
+     */
+    fun temperatureFactor(tempC: Float): Double {
+        val excess = ((tempC - WEAR_REFERENCE_TEMP_C) / 10f).coerceIn(0f, 2f)
+        return Math.pow(2.0, excess.toDouble())
+    }
+
     /** Converts cycles into a share of the rated cycle life (e.g. 500 cycles to 80 % capacity). */
     fun wearPercentOfLife(cycles: Double, ratedCycles: Int): Double =
         if (ratedCycles <= 0) 0.0 else cycles / ratedCycles * 100.0

@@ -17,6 +17,14 @@ Monitor de bateria para Android (Kotlin + Jetpack Compose), com todos os recurso
 | **Alarmes extras** | Temperatura alta e bateria baixa |
 | **Notificação** | Status contínuo com corrente, estimativas, temperatura, tensão e dados da sessão |
 | **Temas** | Sistema, claro, escuro e preto AMOLED (Material You no Android 12+) |
+| **Proteção de bateria** | Detecta o limite de carga nativo (ex.: "Proteção da bateria" da Samsung), mostra o nível segurado, silencia o alarme e não confunde a pausa com carregador lento |
+| **Carregadores** | Cadastre carregadores/cabos, marque cada carga (com sugestão automática pela potência de pico) e compare potência média abaixo de 80% e tempo estimado de 20→80% |
+| **Log de velocidade** | Registra quedas e retomadas de potência abaixo de 80%, com a causa provável (calor, tela ligada…), marcadas no gráfico de potência |
+| **Consumo anormal** | Alerta quando, com a tela desligada por 1 h, o consumo passa do limite (%/h) ou o sono profundo fica baixo — sinal de app mantendo o aparelho acordado |
+| **Hábitos de carga** | Últimos 30 dias: cargas por dia, faixa típica, % acima de 80%, % iniciadas abaixo de 20% e tempo em 100% conectado, com dica personalizada |
+| **Desgaste térmico** | O desgaste considera a temperatura (dobra a cada 10 °C acima de 25 °C) |
+| **Widget e bloco rápido** | Widget de tela inicial e bloco nas Configurações rápidas com nível, corrente e potência |
+| **Backup** | Backup/restauração em .zip do histórico, configurações e desgaste acumulado |
 
 ## Como funciona
 
@@ -30,6 +38,10 @@ Monitor de bateria para Android (Kotlin + Jetpack Compose), com todos os recurso
 - A unidade e o sinal da corrente variam entre fabricantes. Se os valores parecerem errados, ajuste "Unidade da corrente" nas Configurações.
 - A capacidade projetada vem de uma API interna do Android. Se não aparecer, informe-a manualmente.
 - O modelo de desgaste é uma aproximação original (estresse exponencial por nível), não uma medição química.
+
+## Download
+
+O APK de cada versão fica em [Releases](../../releases). É assinado com a chave de depuração: instale por arquivo (o Play Protect pode avisar; toque em "Instalar mesmo assim").
 
 ## Build
 

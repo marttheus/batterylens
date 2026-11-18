@@ -11,11 +11,19 @@ import com.batterylens.battery.BatteryReader
 import com.batterylens.battery.ForegroundAppSampler
 import com.batterylens.data.AppSettings
 import com.batterylens.data.AppUsageEntity
+import com.batterylens.data.Backup
+import com.batterylens.data.ChargeEventEntity
+import com.batterylens.data.ChargerEntity
+import com.batterylens.data.SessionChargerEntity
 import com.batterylens.data.DrainTotals
 import com.batterylens.data.LifetimeStats
 import com.batterylens.data.SampleEntity
 import com.batterylens.data.SessionEntity
 import com.batterylens.domain.BatteryMath
+import com.batterylens.domain.ChargerComparison
+import com.batterylens.domain.ChargerStats
+import com.batterylens.domain.HabitStats
+import com.batterylens.domain.Habits
 import com.batterylens.domain.LiveMetrics
 import com.batterylens.domain.LiveMetricsCalculator
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +81,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .observeDrainTotalsSince(System.currentTimeMillis() - 7 * 86_400_000L)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    val chargers: StateFlow<List<ChargerEntity>> =
+        dao.observeChargers().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val chargerStats: StateFlow<List<ChargerStats>> = combine(dao.observeChargerSessions(), effectiveCapacity) { rows, cap ->
+        ChargerComparison.compute(rows.map { it.chargerId to it.session }, cap)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Most recent session in which a firmware charge limit was seen (null if never). */
+    val lastProtectedSession: StateFlow<SessionEntity?> =
+        dao.observeLastProtectedSession().stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val habits30d: StateFlow<HabitStats?> = sessions.map { list ->
+        val now = System.currentTimeMillis()
+        Habits.compute(list, now - 30 * 86_400_000L, now)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val _restored = MutableStateFlow(false)
+    /** True after a successful restore: the UI must close the app so Room reopens the new file. */
+    val restored: StateFlow<Boolean> = _restored.asStateFlow()
+
     private val _usageAccess = MutableStateFlow(ForegroundAppSampler.hasUsageAccess(application))
     val usageAccess: StateFlow<Boolean> = _usageAccess.asStateFlow()
 
@@ -104,6 +132,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun session(id: Long): Flow<SessionEntity?> = dao.observeSession(id)
     fun samples(id: Long): Flow<List<SampleEntity>> = dao.observeSamples(id)
     fun appUsage(id: Long): Flow<List<AppUsageEntity>> = dao.observeAppUsage(id)
+
+    fun chargeEvents(id: Long): Flow<List<ChargeEventEntity>> = dao.observeChargeEvents(id)
+    fun sessionCharger(id: Long): Flow<Long?> = dao.observeSessionCharger(id)
+
+    fun assignCharger(sessionId: Long, chargerId: Long?) {
+        viewModelScope.launch {
+            if (chargerId == null) dao.clearSessionCharger(sessionId)
+            else dao.setSessionCharger(SessionChargerEntity(sessionId, chargerId))
+        }
+    }
+
+    /** Creates a charger and, when [assignTo] is given, assigns it to that session right away. */
+    fun addCharger(name: String, assignTo: Long?) {
+        val clean = name.trim().take(40)
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            val id = dao.insertCharger(ChargerEntity(name = clean, createdAt = System.currentTimeMillis()))
+            assignTo?.let { dao.setSessionCharger(SessionChargerEntity(it, id)) }
+        }
+    }
+
+    fun renameCharger(charger: ChargerEntity, name: String) {
+        val clean = name.trim().take(40)
+        if (clean.isEmpty()) return
+        viewModelScope.launch { dao.updateCharger(charger.copy(name = clean)) }
+    }
+
+    fun deleteCharger(id: Long) {
+        viewModelScope.launch { dao.deleteCharger(id) }
+    }
+
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch {
+            _message.value = if (Backup.export(app, uri)) "Backup salvo" else "Falha ao salvar o backup"
+        }
+    }
+
+    fun restoreBackup(uri: Uri) {
+        viewModelScope.launch {
+            when (val r = Backup.restore(app, uri)) {
+                Backup.RestoreResult.Ok -> _restored.value = true
+                is Backup.RestoreResult.Invalid -> _message.value = r.reason
+            }
+        }
+    }
 
     fun deleteSession(id: Long) {
         viewModelScope.launch { dao.deleteSession(id) }

@@ -1,7 +1,10 @@
 package com.batterylens.data
 
 import android.content.Context
+import androidx.room.AutoMigration
+import androidx.room.ColumnInfo
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.ForeignKey
@@ -44,6 +47,17 @@ data class SessionEntity(
     val estimatedCapacityMah: Double? = null,
     val maxTempC: Float = 0f,
     val peakCurrentMa: Float = 0f,
+    // --- v2 ---
+    @ColumnInfo(defaultValue = "0") val peakPowerW: Float = 0f,
+    /** Energy moved, in Wh (mAh × V), overall and while the level was below 80 %. */
+    @ColumnInfo(defaultValue = "0") val energyWh: Double = 0.0,
+    @ColumnInfo(defaultValue = "0") val energyBelow80Wh: Double = 0.0,
+    @ColumnInfo(defaultValue = "0") val msBelow80: Long = 0,
+    /** Time spent plugged in at 100 %, and held below 100 % by a firmware charge limit. */
+    @ColumnInfo(defaultValue = "0") val fullHoldMs: Long = 0,
+    @ColumnInfo(defaultValue = "0") val protectedHoldMs: Long = 0,
+    /** Level a firmware charge limit held the battery at, if one was detected. */
+    val protectionLevel: Int? = null,
 ) {
     companion object {
         const val TYPE_CHARGE = "CHARGE"
@@ -93,6 +107,59 @@ data class AppUsageEntity(
     val packageName: String,
     val foregroundMs: Long = 0,
     val mah: Double = 0.0,
+)
+
+/** A charger/cable combination the user named, to compare charge speeds. */
+@Entity(tableName = "chargers")
+data class ChargerEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long,
+)
+
+/**
+ * Charger assigned to a charge session. Kept in its own table so the tracker, which rewrites the
+ * whole session row on every tick, can never overwrite the user's choice.
+ */
+@Entity(
+    tableName = "session_chargers",
+    foreignKeys = [
+        ForeignKey(entity = SessionEntity::class, parentColumns = ["id"], childColumns = ["sessionId"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ChargerEntity::class, parentColumns = ["id"], childColumns = ["chargerId"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [Index("chargerId")],
+)
+data class SessionChargerEntity(
+    @PrimaryKey val sessionId: Long,
+    val chargerId: Long,
+)
+
+/** A sudden drop (or recovery) of charging power, see ChargeEventDetector. */
+@Entity(
+    tableName = "charge_events",
+    foreignKeys = [ForeignKey(
+        entity = SessionEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["sessionId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("sessionId")],
+)
+data class ChargeEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val timestamp: Long,
+    val type: String,
+    val fromW: Float,
+    val toW: Float,
+    val level: Int,
+    val temperatureC: Float,
+    val cause: String?,
+)
+
+data class ChargerSessionRow(
+    @Embedded val session: SessionEntity,
+    val chargerId: Long,
 )
 
 /** Aggregated screen-on/off drain over several discharge sessions. */
@@ -160,18 +227,55 @@ interface BatteryDao {
 
     @Query("DELETE FROM sessions WHERE endTime IS NOT NULL")
     suspend fun deleteAllClosed()
+
+    @Query("SELECT * FROM sessions WHERE protectionLevel IS NOT NULL ORDER BY startTime DESC LIMIT 1")
+    fun observeLastProtectedSession(): Flow<SessionEntity?>
+
+    // --- chargers ---
+    @Insert suspend fun insertCharger(charger: ChargerEntity): Long
+    @Update suspend fun updateCharger(charger: ChargerEntity)
+    @Query("DELETE FROM chargers WHERE id = :id") suspend fun deleteCharger(id: Long)
+
+    @Query("SELECT * FROM chargers ORDER BY name COLLATE NOCASE")
+    fun observeChargers(): Flow<List<ChargerEntity>>
+
+    @Upsert suspend fun setSessionCharger(link: SessionChargerEntity)
+
+    @Query("DELETE FROM session_chargers WHERE sessionId = :sessionId")
+    suspend fun clearSessionCharger(sessionId: Long)
+
+    @Query("SELECT chargerId FROM session_chargers WHERE sessionId = :sessionId")
+    fun observeSessionCharger(sessionId: Long): Flow<Long?>
+
+    @Query(
+        "SELECT sessions.*, session_chargers.chargerId AS chargerId FROM sessions " +
+            "JOIN session_chargers ON session_chargers.sessionId = sessions.id WHERE sessions.type = 'CHARGE'"
+    )
+    fun observeChargerSessions(): Flow<List<ChargerSessionRow>>
+
+    // --- charge events ---
+    @Insert suspend fun insertChargeEvent(event: ChargeEventEntity)
+
+    @Query("SELECT * FROM charge_events WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    fun observeChargeEvents(sessionId: Long): Flow<List<ChargeEventEntity>>
 }
 
 @Database(
-    entities = [SessionEntity::class, SampleEntity::class, AppUsageEntity::class],
-    version = 1,
+    entities = [
+        SessionEntity::class, SampleEntity::class, AppUsageEntity::class,
+        ChargerEntity::class, SessionChargerEntity::class, ChargeEventEntity::class,
+    ],
+    version = 2,
     exportSchema = true,
+    autoMigrations = [AutoMigration(from = 1, to = 2)],
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): BatteryDao
 
     companion object {
+        const val FILE_NAME = "batterylens.db"
+
         fun build(context: Context): AppDatabase =
-            Room.databaseBuilder(context, AppDatabase::class.java, "batterylens.db").build()
+            Room.databaseBuilder(context, AppDatabase::class.java, FILE_NAME).build()
     }
 }

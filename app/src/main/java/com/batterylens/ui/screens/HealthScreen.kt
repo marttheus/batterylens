@@ -27,6 +27,8 @@ import com.batterylens.ui.components.SectionCard
 import com.batterylens.ui.components.StatPair
 import com.batterylens.ui.components.StatRow
 import com.batterylens.ui.components.formatCycles
+import com.batterylens.ui.components.formatDuration
+import androidx.compose.ui.graphics.Color
 import com.batterylens.ui.components.formatMah
 import com.batterylens.ui.components.formatPct
 import com.batterylens.ui.components.formatTemp
@@ -45,6 +47,7 @@ fun HealthScreen(vm: MainViewModel, padding: PaddingValues) {
     val estimates by vm.capacityEstimates.collectAsStateWithLifecycle()
     val lifetime by vm.lifetime.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val habits by vm.habits30d.collectAsStateWithLifecycle()
 
     val openSession = live?.session
     val totalWear = lifetime.wearCycles + (openSession?.takeIf { it.isCharge }?.wearCycles ?: 0.0)
@@ -103,10 +106,30 @@ fun HealthScreen(vm: MainViewModel, padding: PaddingValues) {
             StatRow("Carga total recebida", formatMah(totalCharged))
             design?.let { StatRow("Ciclos completos equivalentes", String.format(java.util.Locale.getDefault(), "%.1f", totalCharged / it)) }
             Text(
-                "O desgaste pondera cada 1% carregado pelo estresse no nível em que ocorre: carregar perto de 100% " +
-                    "conta mais que carregar entre 20% e 80%. Vida útil considerada: ${settings.ratedCycles} ciclos.",
+                "O desgaste pondera cada 1% carregado pelo nível em que ocorre (perto de 100% conta mais) e pela " +
+                    "temperatura (dobra a cada 10 °C acima de 25 °C). Vida útil considerada: ${settings.ratedCycles} ciclos.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+
+        habits?.let { h ->
+            SectionCard("Hábitos de carga (30 dias)") {
+                StatPair(
+                    "Cargas por dia", String.format(java.util.Locale.getDefault(), "%.1f", h.chargesPerDay),
+                    "Faixa típica", "${h.avgStartLevel.toInt()}% → ${h.avgEndLevel.toInt()}%",
+                )
+                StatRow("Cargas acima de 80%", formatPct(h.shareAbove80Pct, 0), if (h.shareAbove80Pct > 50) DrainAmber else Color.Unspecified)
+                StatRow("Cargas iniciadas abaixo de 20%", formatPct(h.shareBelow20StartPct, 0), if (h.shareBelow20StartPct > 30) DrainAmber else Color.Unspecified)
+                StatRow("Tempo em 100% conectado", formatDuration(h.fullHoldMs), if (h.fullHoldMs > 3 * 3_600_000L) DrainAmber else Color.Unspecified)
+                if (h.protectedHoldMs > 0) StatRow("Tempo segurado pela proteção", formatDuration(h.protectedHoldMs), ChargeGreen)
+                val tip = when {
+                    h.fullHoldMs > 3 * 3_600_000L -> "Ficar conectado em 100% é o que mais envelhece a bateria. Ative a proteção de carga do sistema (ex.: limite em 80–85%) para cargas noturnas."
+                    h.shareAbove80Pct > 50 -> "A maioria das cargas passa de 80%. Use o alarme ou o limite nativo para parar antes."
+                    h.shareBelow20StartPct > 30 -> "Muitas cargas começam abaixo de 20%. Recarregar antes reduz o estresse."
+                    else -> "Bons hábitos: suas cargas ficam numa faixa saudável."
+                }
+                Text(tip, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         live?.snapshot?.let { snap ->

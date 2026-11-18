@@ -128,9 +128,10 @@ class BatteryMonitorService : Service() {
         refreshCapacityIfDue(snap.timestamp, s)
         cleanupIfDue(snap.timestamp, s)
 
-        val status = LiveStatus(snap, session, screenOn, fg)
+        val status = LiveStatus(snap, session, screenOn, fg, tracker.protectionLevel)
         LiveRepository.publish(status)
-        alarms.check(status, s)
+        alarms.check(status, s, capacityMah)
+        BatteryWidget.updateAll(this, status)
 
         val metrics = LiveMetricsCalculator.compute(snap, session, capacityMah, s.chargeTarget, screenOn)
         getSystemService(NotificationManager::class.java)

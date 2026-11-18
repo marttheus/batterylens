@@ -32,6 +32,8 @@ data class LiveStatus(
     val session: SessionEntity?,
     val screenOn: Boolean,
     val foregroundApp: String?,
+    /** Level held by a firmware charge limit (e.g. Samsung Battery protection), if detected. */
+    val protectionLevel: Int? = null,
 )
 
 object LiveRepository {

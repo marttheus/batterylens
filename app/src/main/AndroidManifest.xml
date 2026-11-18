@@ -48,6 +48,31 @@
         </service>
 
         <receiver
+            android:name=".service.BatteryWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/battery_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".service.BatteryTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_battery"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
+
+        <receiver
             android:name=".service.BootReceiver"
             android:exported="true">
             <intent-filter>

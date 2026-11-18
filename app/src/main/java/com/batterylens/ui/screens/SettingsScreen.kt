@@ -54,6 +54,11 @@ fun SettingsScreen(vm: MainViewModel, padding: PaddingValues) {
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         uri?.let(vm::exportCsv)
     }
+    val backupSaver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        uri?.let(vm::exportBackup)
+    }
+    var pendingRestore by remember { mutableStateOf<android.net.Uri?>(null) }
+    val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> pendingRestore = uri }
     fun update(t: (AppSettings) -> AppSettings) = vm.updateSettings(t)
     fun open(intent: Intent) { runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
 
@@ -77,6 +82,11 @@ fun SettingsScreen(vm: MainViewModel, padding: PaddingValues) {
             IntSlider(s.tempAlarmC, 35..55) { v -> update { it.copy(tempAlarmC = v) } }
             SwitchRow("Alarme de bateria baixa (${s.lowAlarmLevel}%)", s.lowAlarmEnabled) { v -> update { it.copy(lowAlarmEnabled = v) } }
             IntSlider(s.lowAlarmLevel, 5..50) { v -> update { it.copy(lowAlarmLevel = v) } }
+            SwitchRow("Alerta de consumo anormal (tela desligada)", s.drainAlertEnabled) { v -> update { it.copy(drainAlertEnabled = v) } }
+            Text("Avisar acima de ${s.drainAlertPctPerHour}%/h", style = MaterialTheme.typography.bodySmall)
+            IntSlider(s.drainAlertPctPerHour, 1..10) { v -> update { it.copy(drainAlertPctPerHour = v) } }
+            Text("…ou com sono profundo abaixo de ${s.drainAlertMinDeepSleep}%", style = MaterialTheme.typography.bodySmall)
+            IntSlider(s.drainAlertMinDeepSleep / 5, 0..18) { v -> update { it.copy(drainAlertMinDeepSleep = v * 5) } }
             OutlinedButton(onClick = {
                 open(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -119,6 +129,8 @@ fun SettingsScreen(vm: MainViewModel, padding: PaddingValues) {
                 RadioRow(label, s.retentionDays == days) { update { it.copy(retentionDays = days) } }
             }
             OutlinedButton(onClick = { exporter.launch("batterylens-historico.csv") }) { Text("Exportar CSV") }
+            OutlinedButton(onClick = { backupSaver.launch("batterylens-backup.zip") }) { Text("Fazer backup") }
+            OutlinedButton(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restaurar backup") }
             OutlinedButton(onClick = { confirmClear = true }) { Text("Apagar histórico e estatísticas") }
         }
 
@@ -142,8 +154,18 @@ fun SettingsScreen(vm: MainViewModel, padding: PaddingValues) {
         }
 
         Text(
-            "BatteryLens 1.0 • todos os recursos liberados, sem anúncios.",
+            "BatteryLens ${com.batterylens.BuildConfig.VERSION_NAME} • todos os recursos liberados, sem anúncios.",
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    pendingRestore?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text("Restaurar backup?") },
+            text = { Text("O histórico e as configurações atuais serão substituídos pelos do backup. O app será fechado em seguida.") },
+            confirmButton = { TextButton(onClick = { pendingRestore = null; vm.restoreBackup(uri) }) { Text("Restaurar") } },
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text("Cancelar") } },
         )
     }
 

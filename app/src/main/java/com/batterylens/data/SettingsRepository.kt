@@ -24,6 +24,10 @@ data class AppSettings(
     val tempAlarmC: Int = 45,
     val lowAlarmEnabled: Boolean = false,
     val lowAlarmLevel: Int = 20,
+    /** Alert when the screen-off drain exceeds this %/h, or deep sleep falls below the minimum. */
+    val drainAlertEnabled: Boolean = true,
+    val drainAlertPctPerHour: Int = 3,
+    val drainAlertMinDeepSleep: Int = 60,
     /** 0 = use the value reported by the system power profile. */
     val designCapacityOverride: Int = 0,
     val currentUnit: CurrentUnit = CurrentUnit.AUTO,
@@ -52,6 +56,9 @@ class SettingsRepository(private val context: Context) {
         val TEMP_C = intPreferencesKey("temp_alarm_c")
         val LOW_ALARM = booleanPreferencesKey("low_alarm")
         val LOW_LEVEL = intPreferencesKey("low_alarm_level")
+        val DRAIN_ALERT = booleanPreferencesKey("drain_alert")
+        val DRAIN_PCT = intPreferencesKey("drain_alert_pct_h")
+        val DRAIN_DEEP = intPreferencesKey("drain_alert_min_deep")
         val DESIGN_CAP = intPreferencesKey("design_capacity")
         val UNIT = stringPreferencesKey("current_unit")
         val INVERT = booleanPreferencesKey("invert_current")
@@ -99,6 +106,9 @@ class SettingsRepository(private val context: Context) {
             tempAlarmC = this[K.TEMP_C] ?: d.tempAlarmC,
             lowAlarmEnabled = this[K.LOW_ALARM] ?: d.lowAlarmEnabled,
             lowAlarmLevel = this[K.LOW_LEVEL] ?: d.lowAlarmLevel,
+            drainAlertEnabled = this[K.DRAIN_ALERT] ?: d.drainAlertEnabled,
+            drainAlertPctPerHour = this[K.DRAIN_PCT] ?: d.drainAlertPctPerHour,
+            drainAlertMinDeepSleep = this[K.DRAIN_DEEP] ?: d.drainAlertMinDeepSleep,
             designCapacityOverride = this[K.DESIGN_CAP] ?: d.designCapacityOverride,
             currentUnit = this[K.UNIT]?.let { runCatching { CurrentUnit.valueOf(it) }.getOrNull() } ?: d.currentUnit,
             invertCurrent = this[K.INVERT] ?: d.invertCurrent,
@@ -119,6 +129,9 @@ class SettingsRepository(private val context: Context) {
         this[K.TEMP_C] = s.tempAlarmC.coerceIn(30, 60)
         this[K.LOW_ALARM] = s.lowAlarmEnabled
         this[K.LOW_LEVEL] = s.lowAlarmLevel.coerceIn(5, 50)
+        this[K.DRAIN_ALERT] = s.drainAlertEnabled
+        this[K.DRAIN_PCT] = s.drainAlertPctPerHour.coerceIn(1, 20)
+        this[K.DRAIN_DEEP] = s.drainAlertMinDeepSleep.coerceIn(0, 95)
         this[K.DESIGN_CAP] = s.designCapacityOverride.coerceIn(0, 30_000)
         this[K.UNIT] = s.currentUnit.name
         this[K.INVERT] = s.invertCurrent
