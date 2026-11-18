@@ -165,7 +165,7 @@ interface BatteryDao {
 @Database(
     entities = [SessionEntity::class, SampleEntity::class, AppUsageEntity::class],
     version = 1,
-    exportSchema = false,
+    exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): BatteryDao
